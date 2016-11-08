@@ -81,16 +81,34 @@ class Bank(object):
         # Obtain the overlaps, given a template_number (integer)
         overlaps = np.zeros(self.numtemplates)
         cursor = self.connection.cursor()
+        #start_time0 = time.time()
         for (filename, column), k in itertools.groupby(cursor.execute("SELECT fname.filename, a.column, b.k FROM bank AS a JOIN bank AS b ON (b.filename_id = a.filename_id) JOIN fname ON (fname.filename_id=a.filename_id) WHERE a.k = ? AND a.row IS NULL AND b.row IS NOT NULL ORDER BY fname.filename, b.row;", (template_number,)), lambda (fn, c, k_idx): (fn, c)):
+            #start_time = time.time()
+            print >> sys.stderr, filename
             f = h5py.File(filename, "r")
             overlaps[[x[-1] for x in k]] = f[f.keys()[0]]['overlaps'].value[:,column]
             f.close() # keeps the open file count down
+            #print time.time()-start_time
         for (filename, row), k in itertools.groupby(cursor.execute("SELECT fname.filename, a.row, b.k FROM bank AS a JOIN bank AS b ON (b.filename_id = a.filename_id) JOIN fname ON (fname.filename_id = a.filename_id) WHERE a.k = ? AND a.row IS NOT NULL ORDER BY fname.filename, b.column;", (template_number,)), lambda (fn, r, k_idx): (fn, r)):
             f = h5py.File(filename, "r")
             overlaps[[x[-1] for x in k]] = f[f.keys()[0]]['overlaps'].value[row,:]
             f.close() # keeps the open file count down
+        #print "Time elapsed:", time.time()-start_time0
         return overlaps
 
+    def get_hdf5_files(self, template_number):
+        cursor = self.connection.cursor()
+        filelist = {}
+        c_dict = []
+        r_dict = []
+        for (filename, column), k in itertools.groupby(cursor.execute("SELECT fname.filename, a.column, b.k FROM bank AS a JOIN bank AS b ON (b.filename_id = a.filename_id) JOIN fname ON (fname.filename_id=a.filename_id) WHERE a.k = ? AND a.row IS NULL AND b.row IS NOT NULL ORDER BY fname.filename, b.row;", (template_number,)), lambda (fn, c, k_idx): (fn, c)):
+            c_dict.append(k.next())
+        filelist['column'] = np.array(c_dict)
+        for (filename, row), k in itertools.groupby(cursor.execute("SELECT fname.filename, a.row, b.k FROM bank AS a JOIN bank AS b ON (b.filename_id = a.filename_id) JOIN fname ON (fname.filename_id = a.filename_id) WHERE a.k = ? AND a.row IS NOT NULL ORDER BY fname.filename, b.column;", (template_number,)), lambda (fn, r, k_idx): (fn, r)):
+            r_dict.append(k.next())
+        filelist['row'] = np.array(r_dict)
+        return filelist #filelist (filename, column/row, k)
+    
     def get_templates(self):
         # Obtain the parameters (m1, m2, chi1, chi2) of the templates, in order k
         cursor = self.connection.cursor()
@@ -116,8 +134,8 @@ class Bank(object):
 
 if sys.argv[-1] == "make_sqlite":
     start_time = time.time()
-    #Bank.make_db("uberbank_database.sqlite",glob.glob("/home/heather.fong/rankingstatistic/uberbank/*hdf")) # make sqlite file
-    Bank.make_db("uberbank_database.sqlite",glob.glob("/home/pankow/research-projects/overlap/uberbank/full_run/*hdf"))
+    Bank.make_db("uberbank_database.sqlite",glob.glob("*hdf")) # make sqlite file
+    #Bank.make_db("uberbank_database.sqlite",glob.glob("/home/pankow/research-projects/overlap/uberbank/full_run/bank*hdf"))
     #x = Bank(sqlite3.connect("uberbank_database.sqlite"))
     print "Seconds taken to create database:", time.time()-start_time
 #if sys.argv[1] == "make_ram":
