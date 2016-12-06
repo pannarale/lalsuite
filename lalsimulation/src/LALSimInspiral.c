@@ -792,22 +792,6 @@ int XLALSimInspiralChooseTDWaveform(
                     deltaT, m1, m2, f_min, distance, inclination, spin1, spin2);
             break;
 
-        case SEOBNRv4_opt:
-            /* Waveform-specific sanity checks */
-            if( !XLALSimInspiralWaveformParamsFlagsAreDefault(LALparams) )
-                ABORT_NONDEFAULT_LALDICT_FLAGS(LALparams);
-            if( !checkTransverseSpinsZero(S1x, S1y, S2x, S2y) )
-                ABORT_NONZERO_TRANSVERSE_SPINS(LALparams);
-            if( !checkTidesZero(lambda1, lambda2) )
-                ABORT_NONZERO_TIDES(LALparams);
-            if( f_ref != 0.)
-                XLALPrintWarning("XLAL Warning - %s: This approximant does not use f_ref. The reference phase will be defined at coalescence.\n", __func__);
-            /* Call the waveform driver routine */
-            SpinAlignedEOBversion = 400;
-            ret = XLALSimIMRSpinAlignedEOBWaveform(hplus, hcross, phiRef,
-                                                   deltaT, m1, m2, f_min, distance, inclination, S1z, S2z, SpinAlignedEOBversion);
-            break;
-
         case TEOB:
             /* Waveform-specific sanity checks */
             if( !XLALSimInspiralWaveformParamsFlagsAreDefault(LALparams) )
