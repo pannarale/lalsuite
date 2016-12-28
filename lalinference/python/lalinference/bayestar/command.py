@@ -30,12 +30,24 @@ import glob
 import inspect
 import itertools
 import os
+from select import select
 import shutil
+import stat
 import sys
 import tempfile
+import matplotlib
 from matplotlib import cm
-from .. import cmap
+from ..plot import cmap
 
+
+# Set no-op Matplotlib backend to defer importing anything that requires a GUI
+# until we have determined that it is necessary based on the command line
+# arguments.
+if 'matplotlib.pyplot' in sys.modules:
+    from matplotlib import pyplot as plt
+    plt.switch_backend('Template')
+else:
+    matplotlib.use('Template', warn=False, force=True)
 
 
 @contextlib.contextmanager
@@ -84,6 +96,8 @@ group.add_argument('--max-distance', type=float, metavar='Mpc',
 group.add_argument('--prior-distance-power', type=int, metavar='-1|2',
     default=2, help='Distance prior '
     '[-1 for uniform in log, 2 for uniform in volume, default: %(default)s]')
+group.add_argument('--enable-snr-series', default=False, action='store_true',
+    help='Enable input of SNR time series (WARNING: UNREVIEWED!) [default: no]')
 del group
 
 
@@ -111,12 +125,13 @@ class MatplotlibFigureType(argparse.FileType):
         return plt.savefig(self.string)
 
     def __call__(self, string):
+        from matplotlib import pyplot as plt
         if string == '-':
+            plt.switch_backend(matplotlib.rcParamsOrig['backend'])
             return self.__show
         else:
             with super(MatplotlibFigureType, self).__call__(string):
                 pass
-            from matplotlib import pyplot as plt
             plt.switch_backend('agg')
             self.string = string
             return self.__save
@@ -158,7 +173,7 @@ def colormap(value):
     rcParams['image.cmap'] = value
 
 @type_with_sideeffect(float)
-def figwith(value):
+def figwidth(value):
     from matplotlib import rcParams
     rcParams['figure.figsize'][0] = float(value)
 
@@ -187,7 +202,7 @@ group.add_argument(
 group.add_argument(
     '--help-colormap', action=HelpChoicesAction, choices=colormap_choices)
 group.add_argument(
-    '--figure-width', metavar='INCHES', type=figwith, default='8',
+    '--figure-width', metavar='INCHES', type=figwidth, default='8',
     help='width of figure in inches [default: %(default)s]')
 group.add_argument(
     '--figure-height', metavar='INCHES', type=figheight, default='6',
@@ -332,3 +347,35 @@ def register_to_xmldoc(xmldoc, parser, opts, **kwargs):
         xmldoc, parser.prog,
         {key: (value.name if hasattr(value, 'read') else value)
         for key, value in opts.__dict__.items()})
+
+
+def iterlines(file):
+    """Safely iterate over non-emtpy lines in a file. Works around buffering
+    issues with `for line in sys.stdin`. Also works around early closing of
+    fifos (named pipes)."""
+    fd = file.fileno()
+    # Determine if the file is a FIFO (named pipe).
+    is_fifo = stat.S_ISFIFO(os.fstat(fd).st_mode)
+
+    while True:
+        # Wait until some data is available for reading.
+        rlist, _, _ = select([fd], [], [])
+        assert len(rlist) == 1 and rlist[0] == fd
+
+        # Read a line.
+        line = file.readline()
+
+        if not line:
+            if is_fifo:
+                # If we reached EOF, and this is a FIFO, then just keep reading.
+                continue
+            else:
+                # If we reached EOF, and this is not a FIFO, then exit.
+                break
+
+        # Strip off the trailing newline and any whitespace.
+        line = line.strip()
+
+        # Emit the line if it is not empty.
+        if line:
+            yield line

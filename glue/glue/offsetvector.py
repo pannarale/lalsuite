@@ -1,4 +1,4 @@
-# Copyright (C) 2010--2013  Kipp Cannon
+# Copyright (C) 2010--2013,2015,2016  Kipp Cannon
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -24,8 +24,10 @@
 #
 
 
+import itertools
+
+
 from glue import git_version
-from glue import iterutils
 
 
 __author__ = "Kipp Cannon <kipp.cannon@ligo.org>"
@@ -293,9 +295,7 @@ def component_offsetvectors(offsetvectors, n):
 	"L1": 20} can be constructed from the coincs for the vectors {"H1":
 	0, "H2": 10} and {"H2": 0, "L1": 10}, that is only the relative
 	offsets are significant in determining if two events are
-	coincident, not the absolute offsets.  This assumption is not true
-	for the standard inspiral pipeline, where the absolute offsets are
-	significant due to the periodic wrapping of triggers around rings.
+	coincident, not the absolute offsets.
 	"""
 	#
 	# collect unique instrument set / deltas combinations
@@ -303,7 +303,7 @@ def component_offsetvectors(offsetvectors, n):
 
 	delta_sets = {}
 	for vect in offsetvectors:
-		for instruments in iterutils.choices(sorted(vect), n):
+		for instruments in itertools.combinations(sorted(vect), n):
 			# NOTE:  the arithmetic used to construct the
 			# offsets *must* match the arithmetic used by
 			# offsetvector.deltas so that the results of the

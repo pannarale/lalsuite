@@ -242,7 +242,7 @@ float_keys = ["F", "F0", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "
               "PB_2", "PB_3", "T0_2", "T0_3", "A1_2", "A1_3", "OM_2", "OM_3",
               "ECC_2", "ECC_3", "DIST", "PX", "KIN", "KOM", "A0", "B0", "D_AOP",
               # GW PARAMETERS
-              "H0", "COSIOTA", "PSI", "PHI0", "THETA", "I21", "I31", "C22",
+              "H0", "COSIOTA", "PSI", "PHI0", "THETA", "I21", "I31", "C22", "HPLUS", "HCROSS",
               "C21", "PHI22", "PHI21", "SNR", "COSTHETA", "IOTA", "Q22"]
 str_keys = ["FILE", "PSR", "PSRJ", "NAME", "RAJ", "DECJ", "RA", "DEC", "EPHEM",
             "CLK", "BINARY", "UNITS"]
@@ -1959,6 +1959,25 @@ def antenna_response( gpsTime, ra, dec, psi, det ):
   detval = lal.CachedDetectors[detector]
   response = detval.response
 
+  # check if ra and dec are floats or strings (if strings in hh/dd:mm:ss.s format then convert to rads)
+  if not isinstance(ra, float):
+    if isinstance(ra, str):
+      if len(ra.split(':')) == 3:
+        ra = ra_to_rad(ra)
+      else:
+        raise ValueError, "Right ascension string '%s' not formatted properly" % ra
+    else:
+      raise ValueError, "Right ascension must be a 'float' in radians or a string of the format 'hh:mm:ss.s'"
+
+  if not isinstance(dec, float):
+    if isinstance(dec, str):
+      if len(dec.split(':')) == 3:
+        dec = dec_to_rad(dec)
+      else:
+        raise ValueError, "Declination string '%s' not formatted properly" % ra
+    else:
+      raise ValueError, "Declination must be a 'float' in radians or a string of the format 'dd:mm:ss.s'"
+
   # check if gpsTime is just a float or int, and if so convert into an array
   if isinstance(gpsTime, float) or isinstance(gpsTime, int):
     gpsTime = np.array([gpsTime])
@@ -2376,6 +2395,7 @@ def pulsar_nest_to_posterior(postfile, nestedsamples=False, removeuntrig=True):
   """
 
   from pylal import bayespputils as bppu
+  from pylal.bayespputils import replace_column
 
   fe = os.path.splitext(postfile)[-1].lower() # file extension
 
@@ -2392,7 +2412,7 @@ def pulsar_nest_to_posterior(postfile, nestedsamples=False, removeuntrig=True):
 
         # make everything a float, since that's what's excected of a CommonResultsObj
         for param in params:
-          samples.replace_column(param, samples[param].astype(float))
+          replace_column(samples, param, samples[param].astype(float))
 
         nsResultsObject = (samples.colnames, samples.as_array().view(float).reshape(-1, len(params)))
       except:
@@ -2416,8 +2436,8 @@ def pulsar_nest_to_posterior(postfile, nestedsamples=False, removeuntrig=True):
   permarr = np.arange(nsamps)
   np.random.shuffle(permarr)
   for pname in pnames:
-    # check first and last samples are the same
-    if pos[pname].samples[0] - pos[pname].samples[-1] == 0.:
+    # check if all samples are the same
+    if pos[pname].samples.tolist().count(pos[pname].samples[0]) == len(pos[pname].samples):
       pos.pop(pname)
     else:
       # shuffle
@@ -2598,6 +2618,115 @@ def get_chunk_lengths( ts, chunkMax ):
       j += 1
 
   return chunkLengths
+
+
+def pulsar_estimate_snr(source, det, tstart, duration, Sn, dt=1800):
+  """
+  A function to estimate the signal-to-noise ratio of a pulsar signal (for a triaxial neutron
+  star emitting at twice the rotation frequency from the l=m=2 quadrupole mode) in a given
+  detector over a given time range, for a given one-sided power spectral density.
+
+  Inputs
+  ------
+      source - a dictionary containing 'h0', 'cosiota', 'psi', 'ra' (rads or string), 'dec' (rads or string)
+         det - the detector, e.g. 'H1'
+      tstart - a GPS start time
+    duration - a signal duration (seconds)
+          Sn - a one-sided power spectral density
+          dt - timestep for antenna response calculation [default: 1800s]
+
+  Returns
+  -------
+  rho        - an estimate of the optimal matched filter SNR
+  """
+
+  # if duration is greater than a sidereal day then just calculate the antenna pattern for 1 sidereal day plus the remainder
+  sidday = 86164.0905 # one sidereal day in seconds
+  Ndays = duration/sidday
+  Nsamps = np.floor(sidday/dt) # number of time samples in 1 sidereal day
+  tend = tstart + duration
+
+  sFp = 0
+  sFc = 0
+
+  # get antenna pattern and sum over the square of it
+  if Ndays > 1:
+    tts = np.arange(tstart, tstart+sidday, dt)
+
+    # get antenna pattern over one sidereal day
+    Fp, Fc = antenna_response(tts, source['ra'], source['dec'], source['psi'], det )
+
+    sFp = np.floor(Ndays)*np.sum(Fp**2)
+    sFc = np.floor(Ndays)*np.sum(Fc**2)
+
+  # add on extra fractional part of a day
+  if np.floor(Ndays)*sidday > dt:
+    tts = np.arange(tstart+sidday*np.floor(Ndays), tend, dt)
+
+    Fp, Fc = antenna_response(tts, source['ra'], source['dec'], source['psi'], det)
+
+    sFp += np.sum(Fp**2)
+    sFc += np.sum(Fc**2)
+
+  # get snr squared
+  snr2 = (source['h0']**2/Sn)*dt*(sFp*(0.5*(1+source['cosiota']**2))**2 + sFc*source['cosiota']**2)
+
+  return np.sqrt(snr2)
+
+
+def pulsar_estimate_h0_from_snr(snr, source, det, tstart, duration, Sn, dt=600):
+  """
+  A function to estimate the signal amplitude of a pulsar signal (for a triaxial neutron star emitting at twice
+  the rotation frequency from the l=m=2 quadrupole mode) for a given SNR in a particular detector over
+  a given time range, for a given one-sided power spectral density.
+
+  Inputs
+  ------
+         snr - the optimal matched filter signal-to-noise ratio
+      source - a dictionary containing 'cosiota', 'psi', 'ra' (rads or string), 'dec' (rads or string)
+         det - the detector, e.g. 'H1'
+      tstart - a GPS start time for the signal
+    duration - a signal duration (seconds)
+          Sn - a one-sided power spectral density
+          dt - timestep for antenna response calculation [default: 600s]
+
+  Returns
+  -------
+  h0         - an estimate of signal amplitude required to give the input SNR
+  """
+
+  # if duration is greater than a sidereal day then just calculate the antenna pattern for 1 sidereal day plus the remainder
+  sidday = 86164.0905 # one sidereal day in seconds
+  Ndays = duration/sidday
+  Nsamps = np.floor(sidday/dt) # number of time samples in 1 sidereal day
+  tend = tstart + duration
+
+  sFp = 0
+  sFc = 0
+
+  # get antenna pattern and sum over the square of it
+  if Ndays > 1:
+    tts = np.arange(tstart, tstart+sidday, dt)
+
+    # get antenna pattern over one sidereal day
+    Fp, Fc = antenna_response(tts, source['ra'], source['dec'], source['psi'], det )
+
+    sFp = np.floor(Ndays)*np.sum(Fp**2)
+    sFc = np.floor(Ndays)*np.sum(Fc**2)
+
+  # add on extra fractional part of a day
+  if np.floor(Ndays)*sidday > dt:
+    tts = np.arange(tstart+sidday*np.floor(Ndays), tend, dt)
+
+    Fp, Fc = antenna_response(tts, source['ra'], source['dec'], source['psi'], det)
+
+    sFp += np.sum(Fp**2)
+    sFc += np.sum(Fc**2)
+
+  # get h0 squared
+  h02 = (snr**2*Sn)/(dt*(sFp*(0.5*(1+source['cosiota']**2))**2 + sFc*source['cosiota']**2))
+
+  return np.sqrt(h02)
 
 
 def pulsar_posterior_grid(dets, ts, data, ra, dec, sigmas=None, paramranges={}, datachunks=30, chunkmin=5,

@@ -26,6 +26,7 @@ from glue.iterutils import inorder, uniq
 from lal import PI, MTSUN_SI
 from lalinspiral import CreateSBankWorkspaceCache
 from lalinspiral.sbank.psds import get_neighborhood_ASD, get_neighborhood_PSD, get_PSD, get_neighborhood_df_fmax
+from . import waveforms
 
 class lazy_nhoods(object):
     __slots__ = ("seq", "nhood_param")
@@ -41,7 +42,7 @@ class lazy_nhoods(object):
 
 class Bank(object):
 
-    def __init__(self, noise_model, flow, use_metric=False, cache_waveforms=False, nhood_size=1.0, nhood_param="tau0", coarse_match_df=None, iterative_match_df_max=None, fhigh_max=None):
+    def __init__(self, noise_model, flow, use_metric=False, cache_waveforms=False, nhood_size=1.0, nhood_param="tau0", coarse_match_df=None, iterative_match_df_max=None, fhigh_max=None, optimize_flow=None, flow_column=None):
 
         self.noise_model = noise_model
         self.flow = flow
@@ -49,6 +50,8 @@ class Bank(object):
         self.cache_waveforms = cache_waveforms
         self.coarse_match_df = coarse_match_df
         self.iterative_match_df_max = iterative_match_df_max
+        self.optimize_flow = optimize_flow
+        self.flow_column = flow_column
 
         if self.coarse_match_df and self.iterative_match_df_max and self.coarse_match_df < self.iterative_match_df_max:
             # If this case occurs coarse_match_df offers no improvement, turn off
@@ -60,7 +63,7 @@ class Bank(object):
             self.fhigh_max = fhigh_max
 
         self.nhood_size = nhood_size
-        self.nhood_param = "_" + nhood_param
+        self.nhood_param = nhood_param
 
         self._templates = []
         self._nmatch = 0
@@ -104,6 +107,23 @@ class Bank(object):
         for template in newtmplts:
             # Mark all templates as seed points
             template.is_seed_point = True
+        self._templates.extend(newtmplts)
+        self._templates.sort(key=attrgetter(self.nhood_param))
+
+    def add_from_hdf(self, hdf_fp):
+        num_points = len(hdf_fp['mass1'])
+        newtmplts=[]
+        for idx in xrange(num_points):
+            if not idx % 100000:
+                tmp = {}
+                end_idx = min(idx+100000, num_points)
+                for name in hdf_fp:
+                    tmp[name] = hdf_fp[name][idx:end_idx]
+            c_idx = idx % 100000
+            approx = tmp['approximant'][c_idx]
+            tmplt_class = waveforms.waveforms[approx]
+            newtmplts.append(tmplt_class.from_dict(tmp, c_idx, self))
+            newtmplts[-1].is_seed_point=True
         self._templates.extend(newtmplts)
         self._templates.sort(key=attrgetter(self.nhood_param))
 
@@ -182,8 +202,14 @@ class Bank(object):
                     err_msg += "coarse-value-df value lower."
                     # FIXME: This could be dealt with dynamically??
                     raise ValueError(err_msg)
+
+                # record match and template params for highest match
+                if match > max_match:
+                    max_match = match
+                    template = tmplt
+
                 if (1 - match) > 0.05 + (1 - min_match):
-                    continue 
+                    continue
 
             while df >= df_end:
 
@@ -235,11 +261,12 @@ class Bank(object):
         df, ASD = get_neighborhood_ASD(tmpbank + [proposal], self.flow, self.noise_model)
 
         # compute matches
-        match, best_tmplt_ind = max((self.compute_match(tmplt, proposal, df, ASD=ASD), ind) for ind, tmplt in enumerate(tmpbank))
+        matches = [self.compute_match(tmplt, proposal, df, ASD=ASD) for tmplt in tmpbank]
+        best_tmplt_ind = np.argmax(matches)
         self._nmatch += len(tmpbank)
 
         # best_tmplt_ind indexes tmpbank; add low to get index of full bank
-        return match, best_tmplt_ind + low
+        return matches[best_tmplt_ind], best_tmplt_ind + low
 
     def clear(self):
         if hasattr(self, "_workspace_cache"):

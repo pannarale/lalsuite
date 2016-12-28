@@ -58,12 +58,10 @@ lsctables.table.RowBuilder = lsctables.table.InterningRowBuilder
 
 
 #
-# Use C row classes for memory efficiency and speed.
+# Must use coincidence code's custom sngl_inspiral table row type.
 #
 
 
-from pylal.xlal.tools import CoincMap
-lsctables.CoincMapTable.RowType = lsctables.CoincMap = CoincMap
 lsctables.SnglInspiralTable.RowType = lsctables.SnglInspiral = ligolw_thinca.SnglInspiral
 
 
@@ -167,14 +165,12 @@ else:
 
 if options.coinc_end_time_segs is not None:
 	# Custom Ntuple Comparison Function
-	def restricted_endtime_ntuple_comparefunc(events, offset_vector, seg = options.coinc_end_time_segs):
+	def ntuple_comparefunc(events, offset_vector, seg = options.coinc_end_time_segs):
 		"""
-		Return False (ntuple should be retained) if the end time of the
-		coinc is in the segmentlist segs.
+		Return False (ntuple should be retained) if the end time of
+		the coinc is in the segmentlist segs.
 		"""
 		return ligolw_thinca.coinc_inspiral_end_time(events, offset_vector) not in seg
-
-	ntuple_comparefunc = restricted_endtime_ntuple_comparefunc
 else:
 	ntuple_comparefunc = ligolw_thinca.default_ntuple_comparefunc
 

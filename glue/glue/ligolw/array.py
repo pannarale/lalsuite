@@ -1,4 +1,4 @@
-# Copyright (C) 2006--2015  Kipp Cannon
+# Copyright (C) 2006--2016  Kipp Cannon
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -45,7 +45,6 @@ import itertools
 import numpy
 import re
 import sys
-import warnings
 from xml.sax.saxutils import escape as xmlescape
 from xml.sax.xmlreader import AttributesImpl as Attributes
 
@@ -54,6 +53,7 @@ from glue import git_version
 from . import ligolw
 from . import tokenizer
 from . import types as ligolwtypes
+from six.moves import range
 
 
 __author__ = "Kipp Cannon <kipp.cannon@ligo.org>"
@@ -159,7 +159,7 @@ class ArrayStream(ligolw.Stream):
 			w(newline)
 			w(xmlescape(join(islice(tokens, linelen))))
 			newline = self.Delimiter + newline
-			for i in xrange(lines - 1):
+			for i in range(lines - 1):
 				w(newline)
 				w(xmlescape(join(islice(tokens, linelen))))
 		w(u"\n" + self.end_tag(indent) + u"\n")
@@ -202,7 +202,7 @@ class Array(ligolw.Array):
 		>>> import numpy, sys
 		>>> a = numpy.arange(12, dtype = "double")
 		>>> a.shape = (4, 3)
-		>>> from_array(u"test", a).write(sys.stdout)	# doctest: +NORMALIZE_WHITESPACE
+		>>> Array.build(u"test", a).write(sys.stdout)	# doctest: +NORMALIZE_WHITESPACE
 		<Array Type="real_8" Name="test:array">
 			<Dim>3</Dim>
 			<Dim>4</Dim>
@@ -242,10 +242,6 @@ class Array(ligolw.Array):
 		"""
 		super(Array, self).unlink()
 		self.array = None
-
-
-# FIXME:  remove when no longer used
-from_array = Array.build
 
 
 #

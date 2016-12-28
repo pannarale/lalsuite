@@ -1,3 +1,17 @@
+lalpulsar (1.15.0.1-1) UNRELEASED; urgency=medium
+
+  * Back to development
+
+ -- Leo Singer <leo@lalsuitedev>  Thu, 13 Oct 2016 20:04:37 -0400
+
+lalpulsar (1.15.0-1) unstable; urgency=low
+
+  * LALPulsar 1.15.0
+  * ER10 release
+  * Add python3 package
+
+ -- Adam Mercer <adam.mercer@ligo.org>  Mon, 26 Sep 2016 14:14:42 -0500
+
 lalpulsar (1.14.0-1) unstable; urgency=low
 
   * LALPulsar 1.14.0

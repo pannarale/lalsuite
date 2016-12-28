@@ -25,6 +25,7 @@
 
 
 import bisect
+import itertools
 import math
 import sys
 
@@ -38,7 +39,6 @@ from glue import offsetvector
 import lal
 from pylal import git_version
 from pylal import snglcoinc
-from pylal.xlal.datatypes.snglinspiraltable import SnglInspiralTable as XLALSnglInspiral
 
 
 __author__ = "Kipp Cannon <kipp.cannon@ligo.org>"
@@ -56,19 +56,13 @@ __date__ = git_version.date
 
 
 #
-# Construct a subclass of the C sngl_inspiral row class with the methods
-# that are needed
+# Construct a subclass of the sngl_inspiral row class with the methods that
+# are needed
 #
 
 
-class SnglInspiral(XLALSnglInspiral):
+class SnglInspiral(lsctables.SnglInspiral):
 	__slots__ = ()
-
-	spin1 = lsctables.SnglInspiral.spin1
-	spin2 = lsctables.SnglInspiral.spin2
-
-	__eq__ = lsctables.SnglInspiral.__eq__
-
 	def __cmp__(self, other):
 		# compare self's end time to the LIGOTimeGPS instance
 		# other.  allows bisection searches by GPS time to find
@@ -136,12 +130,9 @@ class InspiralCoincTables(snglcoinc.CoincTables):
 		if vetoes is not None:
 			self.seglists -= vetoes
 
-	def append_coinc(self, process_id, time_slide_id, coinc_def_id, events):
-		#
-		# populate the coinc_event and coinc_event_map tables
-		#
 
-		coinc = snglcoinc.CoincTables.append_coinc(self, process_id, time_slide_id, coinc_def_id, events)
+	def coinc_rows(self, process_id, time_slide_id, coinc_def_id, events):
+		coinc, coincmaps = super(InspiralCoincTables, self).coinc_rows(process_id, time_slide_id, coinc_def_id, events)
 
 		#
 		# populate the coinc_inspiral table:
@@ -156,7 +147,7 @@ class InspiralCoincTables(snglcoinc.CoincTables):
 		#
 
 		coinc_inspiral = self.coinc_inspiral_table.RowType()
-		coinc_inspiral.coinc_event_id = coinc.coinc_event_id
+		coinc_inspiral.coinc_event_id = coinc.coinc_event_id	# = None
 		coinc_inspiral.mass = sum(event.mass1 + event.mass2 for event in events) / len(events)
 		coinc_inspiral.mchirp = sum(event.mchirp for event in events) / len(events)
 		coinc_inspiral.snr = math.sqrt(sum(event.snr**2 for event in events))
@@ -166,7 +157,6 @@ class InspiralCoincTables(snglcoinc.CoincTables):
 		offsetvector = self.time_slide_index[time_slide_id]
 		coinc_inspiral.end = coinc_inspiral_end_time(events, offsetvector)
 		coinc_inspiral.instruments = (event.ifo for event in events)
-		self.coinc_inspiral_table.append(coinc_inspiral)
 
 		#
 		# record the instruments that were on at the time of the
@@ -194,11 +184,14 @@ class InspiralCoincTables(snglcoinc.CoincTables):
 		coinc.instruments = self.uniquifier.setdefault(coinc.instruments, coinc.instruments)
 		coinc_inspiral.ifos = self.uniquifier.setdefault(coinc_inspiral.ifos, coinc_inspiral.ifos)
 
-		#
-		# done
-		#
+		return coinc, coincmaps, coinc_inspiral
 
-		return coinc
+
+	def append_coinc(self, coinc_event, coinc_event_maps, coinc_inspiral):
+		coinc_event = super(InspiralCoincTables, self).append_coinc(coinc_event, coinc_event_maps)
+		coinc_inspiral.coinc_event_id = coinc_event.coinc_event_id
+		self.coinc_inspiral_table.append(coinc_inspiral)
+		return coinc_event
 
 
 #
@@ -220,6 +213,14 @@ def coinc_inspiral_end_time(events, offset_vector):
 	through the geocentre (something that might come out of a proper
 	parameter estimation code).  The "end time" reported by this code
 	gets used for things like plot titles, alert messages, and so on.
+
+	This end time is also used to parallelize ligolw_thinca by allowing
+	a single lock stretch to be split across several jobs without
+	missing or double counting any coincs.  This is achieved by using a
+	definition that is guaranteed to return a bit-identical "end time"
+	for a given set of triggers.  Guaranteeing that allows
+	ligolw_thinca to clip coincs to a sequence of contiguous segments
+	and know that every coinc will reproducibly fall in exactly one.
 	"""
 	event = max(events, key = lambda event: event.snr)
 	return event.end + offset_vector[event.ifo]
@@ -333,10 +334,10 @@ def replicate_threshold(threshold, instruments):
 	# uniqueify
 	instruments = list(set(instruments))
 	# first order
-	thresholds = dict((pair, threshold) for pair in iterutils.choices(instruments, 2))
+	thresholds = dict((pair, threshold) for pair in itertools.combinations(instruments, 2))
 	# other order
 	instruments.reverse()
-	thresholds.update(dict((pair, threshold) for pair in iterutils.choices(instruments, 2)))
+	thresholds.update(dict((pair, threshold) for pair in itertools.combinations(instruments, 2)))
 	# done
 	return thresholds
 
@@ -354,6 +355,7 @@ def ligolw_thinca(
 	likelihood_func = None,
 	likelihood_params_func = None,
 	min_instruments = 2,
+	min_log_L = None,
 	verbose = False
 ):
 	#
@@ -362,6 +364,8 @@ def ligolw_thinca(
 
 	if min_instruments < 1:
 		raise ValueError("min_instruments (=%d) must be >= 1" % min_instruments)
+	if min_log_L is not None and likelihood_func is None:
+		raise ValueError("must supply likelihood_func to impose min_log_L cut")
 
 	#
 	# prepare the coincidence table interface.
@@ -417,7 +421,9 @@ def ligolw_thinca(
 			continue
 		coinc = tuple(sngl_index[event_id] for event_id in coinc)
 		if not ntuple_comparefunc(coinc, node.offset_vector):
-			coinc_tables.append_coinc(process_id, node.time_slide_id, coinc_def_id, coinc)
+			coinc, coincmaps, coinc_inspiral = coinc_tables.coinc_rows(process_id, node.time_slide_id, coinc_def_id, coinc)
+			if min_log_L is None or coinc.likelihood >= min_log_L:
+				coinc_tables.append_coinc(coinc, coincmaps, coinc_inspiral)
 
 	#
 	# done
@@ -597,9 +603,9 @@ class sngl_inspiral_coincs(object):
 		newxmldoc = ligolw.Document()
 		ligolw_elem = newxmldoc.appendChild(ligolw.LIGO_LW())
 
-		# when making these, we can't use table.new_from_template()
-		# because we need to ensure we have a Table subclass, not a
-		# DBTable subclass
+		# when making these, we can't use .copy() method of Table
+		# instances because we need to ensure we have a Table
+		# subclass, not a DBTable subclass
 		new_process_table = ligolw_elem.appendChild(lsctables.New(lsctables.ProcessTable, self.process_table.columnnames))
 		new_process_params_table = ligolw_elem.appendChild(lsctables.New(lsctables.ProcessParamsTable, self.process_params_table.columnnames))
 		new_search_summary_table = ligolw_elem.appendChild(lsctables.New(lsctables.SearchSummaryTable, self.search_summary_table.columnnames))

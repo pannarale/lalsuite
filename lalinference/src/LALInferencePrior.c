@@ -338,7 +338,7 @@ static REAL8 LALInferenceGlitchPrior(LALInferenceRunState *runState, LALInferenc
             val = gsl_matrix_get(gparams,i,j);
 
             //rejection sample on prior
-            if(val<component_min || val>component_max) return -DBL_MAX;
+            if(val<component_min || val>component_max) return -INFINITY;
             else logPrior -= log(component_max-component_min);
           }
         }
@@ -389,7 +389,7 @@ static REAL8 LALInferencePSDPrior(LALInferenceRunState *runState, LALInferenceVa
         val = gsl_matrix_get(nparams,i,j);
 
         //reject prior
-        if(val < component_min || val > component_max) return -DBL_MAX;
+        if(val < component_min || val > component_max) return -INFINITY;
         else if(psdGaussianPrior) logPrior += -0.5*( (mean-val)*(mean-val)/var + log(2.0*LAL_PI*var) );
       }//end loop over windows
     }//end loop over IFOs
@@ -430,7 +430,7 @@ REAL8 LALInferenceInspiralPrior(LALInferenceRunState *runState, LALInferenceVari
     {
       if(item->type==LALINFERENCE_REAL8_t){
         LALInferenceGetMinMaxPrior(priorParams, item->name, &min, &max);
-        if(*(REAL8 *) item->value < min || *(REAL8 *)item->value > max) return -DBL_MAX;
+        if(*(REAL8 *) item->value < min || *(REAL8 *)item->value > max) return -INFINITY;
       }
     }
     else if (LALInferenceCheckGaussianPrior(priorParams, item->name))
@@ -508,31 +508,31 @@ REAL8 LALInferenceInspiralPrior(LALInferenceRunState *runState, LALInferenceVari
   /* Check for individual mass priors */
   if(LALInferenceCheckVariable(priorParams,"mass1_min"))
 		  if(LALInferenceGetREAL8Variable(priorParams,"mass1_min") > m1)
-				  return -DBL_MAX;
+				  return -INFINITY;
   if(LALInferenceCheckVariable(priorParams,"mass1_max"))
 		  if(LALInferenceGetREAL8Variable(priorParams,"mass1_max") < m1)
-				  return -DBL_MAX;
+				  return -INFINITY;
   if(LALInferenceCheckVariable(priorParams,"mass2_min"))
 		  if(LALInferenceGetREAL8Variable(priorParams,"mass2_min") > m2)
-				  return -DBL_MAX;
+				  return -INFINITY;
   if(LALInferenceCheckVariable(priorParams,"mass2_max"))
 		  if(LALInferenceGetREAL8Variable(priorParams,"mass2_max") < m2)
-				  return -DBL_MAX;
+				  return -INFINITY;
 
 
   if(LALInferenceCheckVariable(priorParams,"MTotMax"))
     if(*(REAL8 *)LALInferenceGetVariable(priorParams,"MTotMax") < m1+m2)
-      return -DBL_MAX;
+      return -INFINITY;
 
   if(LALInferenceCheckVariable(priorParams,"MTotMin"))
     if(*(REAL8 *)LALInferenceGetVariable(priorParams,"MTotMin") > m1+m2)
-      return -DBL_MAX;
+      return -INFINITY;
 
   if(model != NULL &&
         LALInferenceCheckVariable(priorParams,"malmquist") &&
         *(UINT4 *)LALInferenceGetVariable(priorParams,"malmquist") &&
         !within_malmquist(runState, params, model))
-      return -DBL_MAX;
+      return -INFINITY;
 
   }/* end prior for signal model parameters */
 
@@ -986,6 +986,7 @@ UINT4 LALInferenceInspiralCubeToPrior(LALInferenceRunState *runState, LALInferen
 
 void LALInferenceCyclicReflectiveBound(LALInferenceVariables *parameter,
                                        LALInferenceVariables *priorArgs){
+  REAL8 val;
   if (parameter == NULL || priorArgs == NULL)
     XLAL_ERROR_VOID(XLAL_EFAULT, "Null arguments received.");
 
@@ -1005,10 +1006,12 @@ void LALInferenceCyclicReflectiveBound(LALInferenceVariables *parameter,
     XLAL_ERROR_VOID(XLAL_EINVAL, "Minimum %f for variable '%s' is not less than maximum %f.", min, paraHead->name, max);
   }
 
+    val = *(REAL8 *)paraHead->value;
+    if (val == INFINITY)
+        return;
+
     if(paraHead->vary==LALINFERENCE_PARAM_CIRCULAR) {
       /* For cyclic boundaries, mod out by range. */
-
-      REAL8 val = *(REAL8 *)paraHead->value;
 
       if (val > max) {
         REAL8 offset = val - min;
@@ -1027,7 +1030,7 @@ void LALInferenceCyclicReflectiveBound(LALInferenceVariables *parameter,
          SKIP NOISE PARAMETERS (ONLY CHECK REAL8) */
       while(1) {
         /* Loop until broken. */
-        REAL8 val = *(REAL8 *)paraHead->value;
+        val = *(REAL8 *)paraHead->value;
         if (val > max) {
           /* val <-- max - (val - max) */
           *(REAL8 *)paraHead->value = 2.0*max - val;
@@ -1127,7 +1130,7 @@ REAL8 LALInferenceInspiralSkyLocPrior(LALInferenceRunState *runState, LALInferen
     {
       if(item->type==LALINFERENCE_REAL8_t){
         LALInferenceGetMinMaxPrior(priorParams, item->name, &min, &max);
-        if(*(REAL8 *) item->value < min || *(REAL8 *)item->value > max) return -DBL_MAX;
+        if(*(REAL8 *) item->value < min || *(REAL8 *)item->value > max) return -INFINITY;
       }
     }
     else if (LALInferenceCheckGaussianPrior(priorParams, item->name))
@@ -1204,24 +1207,24 @@ REAL8 LALInferenceInspiralSkyLocPrior(LALInferenceRunState *runState, LALInferen
 
   if(LALInferenceCheckVariable(priorParams,"MTotMax"))
     if(*(REAL8 *)LALInferenceGetVariable(priorParams,"MTotMax") < m1+m2)
-      return -DBL_MAX;
+      return -INFINITY;
 
   if(LALInferenceCheckVariable(priorParams,"MTotMin"))
     if(*(REAL8 *)LALInferenceGetVariable(priorParams,"MTotMin") > m1+m2)
-      return -DBL_MAX;
+      return -INFINITY;
   /* Check for individual mass priors */
   if(LALInferenceCheckVariable(priorParams,"mass1_min"))
 		  if(LALInferenceGetREAL8Variable(priorParams,"mass1_min") > m1)
-				  return -DBL_MAX;
+				  return -INFINITY;
   if(LALInferenceCheckVariable(priorParams,"mass1_max"))
 		  if(LALInferenceGetREAL8Variable(priorParams,"mass1_max") < m1)
-				  return -DBL_MAX;
+				  return -INFINITY;
   if(LALInferenceCheckVariable(priorParams,"mass2_min"))
 		  if(LALInferenceGetREAL8Variable(priorParams,"mass2_min") > m2)
-				  return -DBL_MAX;
+				  return -INFINITY;
   if(LALInferenceCheckVariable(priorParams,"mass2_max"))
 		  if(LALInferenceGetREAL8Variable(priorParams,"mass2_max") < m2)
-				  return -DBL_MAX;
+				  return -INFINITY;
 
   //PSD priors are Gaussian
   if(LALInferenceCheckVariable(params, "psdscale"))
@@ -1249,7 +1252,7 @@ REAL8 LALInferenceInspiralSkyLocPrior(LALInferenceRunState *runState, LALInferen
         var = sigma->data[j]*sigma->data[j];
         val = gsl_matrix_get(nparams,i,j);
         //reject prior
-        if(val < min || val > max) return -DBL_MAX;
+        if(val < min || val > max) return -INFINITY;
         else if(psdGaussianPrior)prior += -0.5*( (mean-val)*(mean-val)/var + log(2.0*LAL_PI*var) );
       }
     }
@@ -2826,7 +2829,7 @@ REAL8 LALInferenceFlatBoundedPrior(LALInferenceRunState *runState, LALInferenceV
     if(LALInferenceCheckMinMaxPrior(runState->priorArgs, cur->name))
     {
       LALInferenceGetMinMaxPrior(runState->priorArgs, cur->name, &min, &max);
-      if (min>*(REAL8 *)cur->value || max<*(REAL8 *)cur->value) return -DBL_MAX;
+      if (min>*(REAL8 *)cur->value || max<*(REAL8 *)cur->value) return -INFINITY;
     }
   }
   return 0.0;
@@ -2908,7 +2911,7 @@ REAL8 LALInferenceSineGaussianPrior(LALInferenceRunState *runState, LALInference
     else
     {
       LALInferenceGetMinMaxPrior(priorParams, item->name, &min, &max);
-      if(*(REAL8 *) item->value < min || *(REAL8 *)item->value > max) return -DBL_MAX;
+      if(*(REAL8 *) item->value < min || *(REAL8 *)item->value > max) return -INFINITY;
     }
   }
   /*Use a distribution uniform in space volume */
@@ -3006,11 +3009,12 @@ REAL8 LALInference1DGMMPrior(LALInferenceVariables *priorArgs, const char *name,
 
   if ( value < gmmlow || value > gmmhigh ){ return -INFINITY; }
 
-  REAL8 logPrior = 0.;
+  REAL8 logPrior = -INFINITY, thisGauss = 0.;
   UINT4 i = 0;
   for ( i = 0; i < gmmweights->length; i++ ){
-    logPrior += log(gmmweights->data[i]) - 0.5*(gmmmus->data[i] - value)*(gmmmus->data[i] - value)/(gmmsigmas->data[i]*gmmsigmas->data[i]);
-    logPrior -= 0.5*(LAL_LNPI + LAL_LN2 + log(gmmsigmas->data[i])); /* Gaussian normalisation */
+    thisGauss = log(gmmweights->data[i]) - 0.5*(gmmmus->data[i] - value)*(gmmmus->data[i] - value)/(gmmsigmas->data[i]*gmmsigmas->data[i]);
+    thisGauss -= (0.5*(LAL_LNPI + LAL_LN2) + log(gmmsigmas->data[i])); /* normalisation */
+    logPrior = logaddexp(logPrior, thisGauss); /* sum Gaussianians */
   }
   return logPrior;
 }

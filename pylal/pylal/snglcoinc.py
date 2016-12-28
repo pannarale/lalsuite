@@ -1,4 +1,4 @@
-# Copyright (C) 2006--2014  Kipp Cannon, Drew G. Keppel, Jolien Creighton
+# Copyright (C) 2006--2016  Kipp Cannon, Drew G. Keppel, Jolien Creighton
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -49,7 +49,9 @@ import sys
 import warnings
 
 
-from glue import iterutils
+import lal
+
+
 from glue import offsetvector
 from glue import segmentsUtils
 from glue.ligolw import ligolw
@@ -58,7 +60,6 @@ from glue.ligolw import param as ligolw_param
 from glue.ligolw import lsctables
 from glue.text_progress_bar import ProgressBar
 from pylal import git_version
-from pylal import inject
 from pylal import rate
 
 
@@ -218,6 +219,19 @@ class EventListDict(dict):
 #
 
 
+def light_travel_time(instrument1, instrument2):
+	"""
+	Compute and return the time required for light to travel through
+	free space the distance separating the two instruments.  The inputs
+	are two instrument prefixes (e.g., "H1"), and the result is
+	returned in seconds.  Note how this differs from LAL's
+	XLALLightTravelTime() function, which takes two detector objects as
+	input, and returns the time truncated to integer nanoseconds.
+	"""
+	dx = lal.cached_detector_by_prefix[instrument1].location - lal.cached_detector_by_prefix[instrument2].location
+	return math.sqrt((dx * dx).sum()) / lal.C_SI
+
+
 def get_doubles(eventlists, comparefunc, instruments, thresholds, verbose = False):
 	"""
 	Given an instance of an EventListDict, an event comparison
@@ -286,7 +300,7 @@ def get_doubles(eventlists, comparefunc, instruments, thresholds, verbose = Fals
 		threshold_data = thresholds[(eventlista.instrument, eventlistb.instrument)]
 	except KeyError as e:
 		raise KeyError("no coincidence thresholds provided for instrument pair %s, %s" % e.args[0])
-	light_travel_time = inject.light_travel_time(eventlista.instrument, eventlistb.instrument)
+	dt = light_travel_time(eventlista.instrument, eventlistb.instrument)
 
 	# for each event in the shortest list
 
@@ -297,7 +311,7 @@ def get_doubles(eventlists, comparefunc, instruments, thresholds, verbose = Fals
 		# iterate over events from the other list that are
 		# coincident with the event, and return the pairs
 
-		for eventb in eventlistb.get_coincs(eventa, eventlista.offset, light_travel_time, threshold_data, comparefunc):
+		for eventb in eventlistb.get_coincs(eventa, eventlista.offset, dt, threshold_data, comparefunc):
 			yield (eventa, eventb)
 	if verbose:
 		print >>sys.stderr, "\t100.0%"
@@ -427,7 +441,7 @@ class TimeSlideGraphNode(object):
 		# used by any other components, they definitely won't be
 		# used to construct our n-instrument coincs, and so they go
 		# into our unused pile
-		for componenta, componentb in iterutils.choices(self.components, 2):
+		for componenta, componentb in itertools.combinations(self.components, 2):
 			self.unused_coincs |= componenta.unused_coincs & componentb.unused_coincs
 
 		if verbose:
@@ -492,7 +506,7 @@ class TimeSlideGraphNode(object):
 					# remove them from the unused list
 					# because we just used them, then
 					# record the coinc and move on
-					self.unused_coincs -= set(iterutils.choices(new_coinc, len(new_coinc) - 1))
+					self.unused_coincs -= set(itertools.combinations(new_coinc, len(new_coinc) - 1))
 					self.coincs.append(new_coinc)
 		if verbose:
 			print >>sys.stderr, "\t100.0%"
@@ -512,6 +526,14 @@ class TimeSlideGraphNode(object):
 
 class TimeSlideGraph(object):
 	def __init__(self, offset_vector_dict, verbose = False):
+		#
+		# safety check input
+		#
+
+		offset_vector = min(offset_vector_dict.values(), key = lambda x: len(x))
+		if len(offset_vector) < 2:
+			raise ValueError("encountered offset vector with fewer than 2 instruments: %s", str(offset_vector))
+
 		#
 		# populate the graph head nodes.  these represent the
 		# target offset vectors requested by the calling code.
@@ -663,40 +685,64 @@ class CoincTables(object):
 		# required.  when that is fixed, remove this
 		self.time_slide_index = dict((time_slide_id, type(offset_vector)((instrument, lsctables.LIGOTimeGPS(offset)) for instrument, offset in offset_vector.items())) for time_slide_id, offset_vector in self.time_slide_index.items())
 
-	def append_coinc(self, process_id, time_slide_id, coinc_def_id, events):
+	def coinc_rows(self, process_id, time_slide_id, coinc_def_id, events):
 		"""
-		Takes a process ID, a time slide ID, and a list of events,
-		and adds the events as a new coincidence to the coinc_event
-		and coinc_map tables.
+		From a process ID, a time slide ID, and a sequence of
+		events (generator expressions are OK), constructs and
+		initializes a coinc_event table row object and a sequence
+		of coinc_event_map table row objects describing the
+		coincident event.  The return value is the coinc_event row
+		and a sequence of the coinc_event_map rows.
 
-		Subclasses that wish to override this method should first
-		chain to this method to construct and initialize the
-		coinc_event and coinc_event_map rows.  When subclassing
-		this method, if the time shifts that were applied to the
-		events in constructing the coincidence are required to
-		compute additional metadata, they can be retrieved from
-		self.time_slide_index using the time_slide_id.
+		The coinc_event is *not* assigned a coinc_event_id by this
+		method.  It is expected that will be done in
+		.append_coinc().  This allows sub-classes to defer the
+		question of whether or not to include the coincidence in
+		the search results without consuming additional IDs.
+
+		The coinc_event row's .instruments and .likelihood
+		attributes are initialized to null values.  The calling
+		code should populate as needed.
+
+		When subclassing this method, if the time shifts that were
+		applied to the events in constructing the coincidence are
+		required to compute additional metadata, they can be
+		retrieved from self.time_slide_index using the
+		time_slide_id.
 		"""
-		# so we can iterate over it more than once incase we've
-		# been given a generator expression.
-		events = tuple(events)
-
 		coinc = self.coinctable.RowType()
 		coinc.process_id = process_id
 		coinc.coinc_def_id = coinc_def_id
-		coinc.coinc_event_id = self.coinctable.get_next_id()
+		coinc.coinc_event_id = None
 		coinc.time_slide_id = time_slide_id
 		coinc.set_instruments(None)
-		coinc.nevents = len(events)
 		coinc.likelihood = None
-		self.coinctable.append(coinc)
+
+		coincmaps = []
 		for event in events:
 			coincmap = self.coincmaptable.RowType()
 			coincmap.coinc_event_id = coinc.coinc_event_id
 			coincmap.table_name = event.event_id.table_name
 			coincmap.event_id = event.event_id
-			self.coincmaptable.append(coincmap)
-		return coinc
+			coincmaps.append(coincmap)
+
+		coinc.nevents = len(coincmaps)
+
+		return coinc, coincmaps
+
+	def append_coinc(self, coinc_event_row, coinc_event_map_rows):
+		"""
+		Appends the coinc_event row object and coinc_event_map row
+		objects to the coinc_event and coinc_event_map tables
+		respectively after assigning a coinc_event_id to the
+		coincidence.  Returns the coinc_event row object.
+		"""
+		coinc_event_row.coinc_event_id = self.coinctable.get_next_id()
+		self.coinctable.append(coinc_event_row)
+		for row in coinc_event_map_rows:
+			row.coinc_event_id = coinc_event_row.coinc_event_id
+			self.coincmaptable.append(row)
+		return coinc_event_row
 
 
 #
@@ -807,7 +853,7 @@ class CoincSynthesizer(object):
 		frozensets).
 		"""
 		all_instruments = tuple(self.eventlists)
-		return tuple(frozenset(instruments) for n in range(self.min_instruments, len(all_instruments) + 1) for instruments in iterutils.choices(all_instruments, n))
+		return tuple(frozenset(instruments) for n in range(self.min_instruments, len(all_instruments) + 1) for instruments in itertools.combinations(all_instruments, n))
 
 
 	@property
@@ -883,7 +929,7 @@ class CoincSynthesizer(object):
 		try:
 			return self._tau
 		except AttributeError:
-			self._tau = dict((frozenset(ab), self.delta_t + inject.light_travel_time(*ab)) for ab in iterutils.choices(tuple(self.eventlists), 2))
+			self._tau = dict((frozenset(ab), self.delta_t + light_travel_time(*ab)) for ab in itertools.combinations(tuple(self.eventlists), 2))
 			return self._tau
 
 
@@ -968,7 +1014,7 @@ class CoincSynthesizer(object):
 		# maximum allowed \Delta t between them to avoid doing the
 		# work associated with assembling the sequence inside a
 		# loop
-					ijseq = tuple((i, j, self.tau[frozenset((instruments[i], instruments[j]))]) for (i, j) in iterutils.choices(range(len(instruments)), 2))
+					ijseq = tuple((i, j, self.tau[frozenset((instruments[i], instruments[j]))]) for (i, j) in itertools.combinations(range(len(instruments)), 2))
 		# compute the numerator and denominator of the fraction of
 		# events coincident with the anchor instrument that are
 		# also mutually coincident.  this is done by picking a
@@ -1192,7 +1238,7 @@ class CoincSynthesizer(object):
 			events = tuple(random.choice(self.eventlists[instrument]) for instrument in instruments)
 
 			# test for a genuine zero-lag coincidence among them
-			if not allow_zero_lag and any(abs(ta - tb) < self.tau[frozenset((instrumenta, instrumentb))] for (instrumenta, ta), (instrumentb, tb) in iterutils.choices(zip(instruments, (timefunc(event) for event in events)), 2)):
+			if not allow_zero_lag and any(abs(ta - tb) < self.tau[frozenset((instrumenta, instrumentb))] for (instrumenta, ta), (instrumentb, tb) in itertools.combinations(zip(instruments, (timefunc(event) for event in events)), 2)):
 				continue
 
 			# return acceptable event tuples
@@ -1220,7 +1266,7 @@ class CoincSynthesizer(object):
 		instruments = tuple(instruments)
 		anchor, instruments = instruments[0], instruments[1:]
 		windows = tuple((-self.tau[frozenset((anchor, instrument))], +self.tau[frozenset((anchor, instrument))]) for instrument in instruments)
-		ijseq = tuple((i, j, self.tau[frozenset((instruments[i], instruments[j]))]) for (i, j) in iterutils.choices(range(len(instruments)), 2))
+		ijseq = tuple((i, j, self.tau[frozenset((instruments[i], instruments[j]))]) for (i, j) in itertools.combinations(range(len(instruments)), 2))
 		while True:
 			dt = tuple(random.uniform(*window) for window in windows)
 			if all(abs(dt[i] - dt[j]) <= maxdt for i, j, maxdt in ijseq):
@@ -1469,7 +1515,7 @@ def InstrumentBins(names = ("E0", "E1", "E2", "E3", "G1", "H1", "H2", "H1H2+", "
 	>>> x.centres()[55]
 	frozenset(['H1', 'L1'])
 	"""
-	return rate.HashableBins(frozenset(combo) for n in range(len(names) + 1) for combo in iterutils.choices(names, n))
+	return rate.HashableBins(frozenset(combo) for n in range(len(names) + 1) for combo in itertools.combinations(names, n))
 
 
 #
@@ -1846,12 +1892,7 @@ class CoincParamsDistributions(object):
 		given the name name.
 		"""
 		xml = ligolw.LIGO_LW({u"Name": u"%s:%s" % (name, self.ligo_lw_name_suffix)})
-		# FIXME: remove try/except when we can rely on new-enough
-		# glue to provide .from_pyvalue() class method
-		try:
-			xml.appendChild(ligolw_param.Param.from_pyvalue(u"process_id", self.process_id))
-		except AttributeError:
-			xml.appendChild(ligolw_param.from_pyvalue(u"process_id", self.process_id))
+		xml.appendChild(ligolw_param.Param.from_pyvalue(u"process_id", self.process_id))
 		def store(xml, prefix, source_dict):
 			for name, binnedarray in sorted(source_dict.items()):
 				xml.appendChild(binnedarray.to_xml(u"%s:%s" % (prefix, name)))

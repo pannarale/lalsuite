@@ -175,7 +175,7 @@ for header_name in headers:
             fail("enum '%s' in header '%s' has no tag-name" % (enum_name, header_name))
         for enumitem in enum.findall('enumitem'):
             enumitem_name = get_swig_attr(enumitem, 'name')
-            constants[enumitem_name] = cdecl
+            constants[enumitem_name] = enumitem
             constant_names[enumitem_name] = enumitem_name
 
 # function: build renaming map for symbols, using symbol prefix order
@@ -312,9 +312,6 @@ f.write('%header %{\n')
 for header_name in ordered_headers:
     f.write('#include <lal/%s>\n' % header_name)
 f.write('%}\n')
-
-# write name of VCS information check function, called when module is loaded
-f.write('%%header %%{#define VCS_INFO_CHECK X%sVCSInfoCheck%%}\n' % package_name)
 
 # perform symbol renames
 for name in sorted(renames):
