@@ -112,7 +112,7 @@ int XLALSimIMRPhenomPCalculateModelParameters(
     const REAL8 s2x,                /**< Initial value of s2x: dimensionless spin of BH 2 */
     const REAL8 s2y,                /**< Initial value of s2y: dimensionless spin of BH 2 */
     const REAL8 s2z,                /**< Initial value of s2z: dimensionless spin of BH 2 */
-    IMRPhenomP_version_type IMRPhenomP_version /**< IMRPhenomP(v1) uses IMRPhenomC, IMRPhenomPv2 uses IMRPhenomD */
+    IMRPhenomP_version_type IMRPhenomP_version /**< IMRPhenomP(v1) uses IMRPhenomC, IMRPhenomPv2 uses IMRPhenomD, IMRPhenomPv3 is IMRPhenomPv2 with different chi_p */
 )
 {
   // Note that the angle phiJ defined below and alpha0 are degenerate. Therefore we do not output phiJ.
@@ -156,7 +156,17 @@ int XLALSimIMRPhenomPCalculateModelParameters(
   const REAL8 A2 = 2 + (3*m1) / (2*m2);
   const REAL8 ASp1 = A1*S1_perp;
   const REAL8 ASp2 = A2*S2_perp;
-  const REAL8 num = (ASp2 > ASp1) ? ASp2 : ASp1;
+  REAL8 num;
+
+  switch (IMRPhenomP_version) {
+    case IMRPhenomPv3_V:
+      num = ASp1 + ASp2;
+      break;
+    default:
+      num = (ASp2 > ASp1) ? ASp2 : ASp1;
+      break;
+  }
+
   const REAL8 den = (m2 > m1) ? A2*m2_2 : A1*m1_2;
   *chip = num / den; /*  chip = max(A1 Sp1, A2 Sp2) / (A_i m_i^2) for i index of larger BH (See Eqn. 32 in technical document) */
 
@@ -171,6 +181,7 @@ int XLALSimIMRPhenomPCalculateModelParameters(
       L0 = M*M * L2PNR_v1(v_ref, eta); /* Use 2PN approximation for L. */
       break;
     case IMRPhenomPv2_V:
+    case IMRPhenomPv3_V:
       L0 = M*M * L2PNR(v_ref, eta);   /* Use 2PN approximation for L. */
       break;
     default:
@@ -248,7 +259,7 @@ int XLALSimIMRPhenomP(
   const REAL8 f_min,                          /**< Starting GW frequency (Hz) */
   const REAL8 f_max,                          /**< End frequency; 0 defaults to ringdown cutoff freq */
   const REAL8 f_ref,                          /**< Reference frequency */
-  IMRPhenomP_version_type IMRPhenomP_version, /**< IMRPhenomPv1 uses IMRPhenomC, IMRPhenomPv2 uses IMRPhenomD */
+  IMRPhenomP_version_type IMRPhenomP_version, /**< IMRPhenomP(v1) uses IMRPhenomC, IMRPhenomPv2 uses IMRPhenomD, IMRPhenomPv3 is IMRPhenomPv2 with different chi_p */
   const LALSimInspiralTestGRParam *extraParams) /**<linked list containing the extra testing GR parameters */
 {
   // See Fig. 1. in arxiv:1408.1810 for diagram of the angles.
@@ -302,7 +313,7 @@ int XLALSimIMRPhenomPFrequencySequence(
   const REAL8 alpha0,                         /**< Initial value of alpha angle (azimuthal precession angle) */
   const REAL8 phic,                           /**< Orbital phase at the peak of the underlying non precessing model (rad) */
   const REAL8 f_ref,                          /**< Reference frequency */
-  IMRPhenomP_version_type IMRPhenomP_version, /**< IMRPhenomPv1 uses IMRPhenomC, IMRPhenomPv2 uses IMRPhenomD */
+  IMRPhenomP_version_type IMRPhenomP_version, /**< IMRPhenomP(v1) uses IMRPhenomC, IMRPhenomPv2 uses IMRPhenomD, IMRPhenomPv3 is IMRPhenomPv2 with different chi_p */
   const LALSimInspiralTestGRParam *extraParams) /**<linked list containing the extra testing GR parameters */
 {
   // See Fig. 1. in arxiv:1408.1810 for diagram of the angles.
@@ -346,7 +357,7 @@ static int PhenomPCore(
    * If deltaF > 0, the frequency points given in freqs are uniformly spaced with
    * spacing deltaF. Otherwise, the frequency points are spaced non-uniformly.
    * Then we will use deltaF = 0 to create the frequency series we return. */
-  IMRPhenomP_version_type IMRPhenomP_version, /**< IMRPhenomPv1 uses IMRPhenomC, IMRPhenomPv2 uses IMRPhenomD */
+  IMRPhenomP_version_type IMRPhenomP_version, /**< IMRPhenomP(v1) uses IMRPhenomC, IMRPhenomPv2 uses IMRPhenomD, IMRPhenomPv3 is IMRPhenomPv2 with different chi_p */
   const LALSimInspiralTestGRParam *extraParams /**<linked list containing the extra testing GR parameters */
   )
 {
@@ -362,7 +373,15 @@ static int PhenomPCore(
   XLAL_CHECK(distance > 0, XLAL_EDOM, "distance must be positive.\n");
   XLAL_CHECK(fabs(chi1_l_in) <= 1.0, XLAL_EDOM, "Aligned spin chi1_l=%g must be <= 1 in magnitude!\n", chi1_l_in);
   XLAL_CHECK(fabs(chi2_l_in) <= 1.0, XLAL_EDOM, "Aligned spin chi2_l=%g must be <= 1 in magnitude!\n", chi2_l_in);
-  XLAL_CHECK(fabs(chip) <= 1.0, XLAL_EDOM, "In-plane spin chip =%g must be <= 1 in magnitude!\n", chip);
+  switch (IMRPhenomP_version) {
+    case IMRPhenomPv1_V:
+    case IMRPhenomPv2_V:
+      XLAL_CHECK(fabs(chip) <= 1.0, XLAL_EDOM, "In-plane spin chip =%g must be <= 1 in magnitude!\n", chip);
+    case IMRPhenomPv3_V:
+      break;
+    default:
+      break;
+  }
 
   // See Fig. 1. in arxiv:1408.1810 for diagram of the angles.
   // Note that the angles phiJ which is calculated internally in XLALSimIMRPhenomPCalculateModelParameters
@@ -440,8 +459,15 @@ static int PhenomPCore(
           XLAL_ERROR(XLAL_EDOM, "IMRPhenomPv2: Mass ratio q > 100 which is way outside the calibration range q <= 18.\n");
       CheckMaxOpeningAngle(m1, m2, chi1_l, chi2_l, chip);
       break;
+    case IMRPhenomPv3_V:
+      if (q > 18.0)
+        XLAL_PRINT_WARNING("IMRPhenomPv3: Warning: The underlying non-precessing model is calibrated up to m1/m2 <= 18.\n");
+      else if (q > 100.0)
+          XLAL_ERROR(XLAL_EDOM, "IMRPhenomPv3: Mass ratio q > 100 which is way outside the calibration range q <= 18.\n");
+      CheckMaxOpeningAngle(m1, m2, chi1_l, chi2_l, chip);
+      break;
     default:
-      XLAL_ERROR( XLAL_EINVAL, "Unknown IMRPhenomP version!\nAt present only v1 and v2 are available." );
+      XLAL_ERROR( XLAL_EINVAL, "Unknown IMRPhenomP version!\nAt present only v1, v2, and v3 are available." );
       break;
     }
 
@@ -498,7 +524,8 @@ static int PhenomPCore(
       f_final = PCparams->fRingDown;
       break;
     case IMRPhenomPv2_V:
-      XLAL_PRINT_INFO("*** IMRPhenomP version 2: based on IMRPhenomD ***");
+    case IMRPhenomPv3_V:
+      XLAL_PRINT_INFO("*** IMRPhenomP versions 2 and 3: based on IMRPhenomD ***");
       // PhenomD uses FinalSpin0815() to calculate the final spin if the spins are aligned.
       // We use a generalized version of FinalSpin0815() that includes the in-plane spin chip.
       finspin = FinalSpinIMRPhenomD_all_in_plane_spin_on_larger_BH(m1, m2, chi1_l, chi2_l, chip);
@@ -531,7 +558,7 @@ static int PhenomPCore(
       f_final = pAmp->fRD / m_sec;
       break;
     default:
-      XLALPrintError( "XLAL Error - %s: Unknown IMRPhenomP version!\nAt present only v1 and v2 are available.\n", __func__);
+      XLALPrintError( "XLAL Error - %s: Unknown IMRPhenomP version!\nAt present only v1, v2, and v3 are available.\n", __func__);
       errcode = XLAL_EINVAL;
       goto cleanup;
       break;
@@ -647,7 +674,7 @@ static int PhenomPCore(
   AmpInsPrefactors amp_prefactors;
   PhiInsPrefactors phi_prefactors;
 
-  if (IMRPhenomP_version == IMRPhenomPv2_V) {
+  if (IMRPhenomP_version == IMRPhenomPv2_V || IMRPhenomP_version == IMRPhenomPv3_V) {
     errcode = init_amp_ins_prefactors(&amp_prefactors, pAmp);
     XLAL_CHECK(XLAL_SUCCESS == errcode, errcode, "init_amp_ins_prefactors() failed.");
     errcode = init_phi_ins_prefactors(&phi_prefactors, pPhi, pn);
@@ -822,7 +849,7 @@ static int PhenomPCoreOneFrequency(
   COMPLEX16 *hp,                              /**< [out] plus polarization \f$\tilde h_+\f$ */
   COMPLEX16 *hc,                              /**< [out] cross polarization \f$\tilde h_x\f$ */
   REAL8 *phasing,                             /**< [out] overall phasing */
-  IMRPhenomP_version_type IMRPhenomP_version, /**< IMRPhenomP(v1) uses IMRPhenomC, IMRPhenomPv2 uses IMRPhenomD */
+  IMRPhenomP_version_type IMRPhenomP_version, /**< IMRPhenomP(v1) uses IMRPhenomC, IMRPhenomPv2 uses IMRPhenomD, IMRPhenomPv3 is IMRPhenomPv2 with different chi_p */
   AmpInsPrefactors *amp_prefactors,           /**< pre-calculated (cached for saving runtime) coefficients for amplitude. See LALSimIMRPhenomD_internals.c*/
   PhiInsPrefactors *phi_prefactors            /**< pre-calculated (cached for saving runtime) coefficients for phase. See LALSimIMRPhenomD_internals.*/)
 {
@@ -855,6 +882,7 @@ static int PhenomPCoreOneFrequency(
       SL = chi_eff*m2;        /* Dimensionfull aligned spin of the largest BH. SL = m2^2 chil = m2*M*chi_eff */
       break;
     case IMRPhenomPv2_V:
+    case IMRPhenomPv3_V:
       XLAL_CHECK(pAmp != NULL, XLAL_EFAULT);
       XLAL_CHECK(pPhi != NULL, XLAL_EFAULT);
       XLAL_CHECK(PNparams != NULL, XLAL_EFAULT);
@@ -867,7 +895,7 @@ static int PhenomPCoreOneFrequency(
       SL = chi1_l*m1*m1 + chi2_l*m2*m2;        /* Dimensionfull aligned spin. */
       break;
     default:
-      XLAL_ERROR( XLAL_EINVAL, "Unknown IMRPhenomP version!\nAt present only v1 and v2 are available." );
+      XLAL_ERROR( XLAL_EINVAL, "Unknown IMRPhenomP version!\nAt present only v1, v2, and v3 are available." );
       break;
   }
 
@@ -900,10 +928,11 @@ static int PhenomPCoreOneFrequency(
       WignerdCoefficients_SmallAngleApproximation(&cBetah, &sBetah, omega_cbrt, SL, eta, Sperp);
       break;
     case IMRPhenomPv2_V:
+    case IMRPhenomPv3_V:
       WignerdCoefficients(&cBetah, &sBetah, omega_cbrt, SL, eta, Sperp);
       break;
   default:
-    XLAL_ERROR( XLAL_EINVAL, " Unknown IMRPhenomP version!\nAt present only v1 and v2 are available." );
+    XLAL_ERROR( XLAL_EINVAL, " Unknown IMRPhenomP version!\nAt present only v1, v2, and v3 are available." );
     break;
   }
 

@@ -140,6 +140,7 @@ static const char *lalSimulationApproximantNames[] = {
     INITIALIZE_NAME(IMRPhenomD),
     INITIALIZE_NAME(IMRPhenomP),
     INITIALIZE_NAME(IMRPhenomPv2),
+    INITIALIZE_NAME(IMRPhenomPv3),
     INITIALIZE_NAME(IMRPhenomFC),
     INITIALIZE_NAME(TaylorEt),
     INITIALIZE_NAME(TaylorT4),
@@ -258,6 +259,7 @@ static double fixReferenceFrequency(double f_ref, double f_min, Approximant appr
         case SpinTaylorF2:
         case IMRPhenomP:
         case IMRPhenomPv2:
+        case IMRPhenomPv3:
             return f_min;
         default:
             break;
@@ -1374,6 +1376,36 @@ int XLALSimInspiralChooseFDWaveform(
             ret = XLALSimIMRPhenomP(hptilde, hctilde,
               chi1_l, chi2_l, chip, thetaJ,
               m1, m2, r, alpha0, phiRef, deltaF, f_min, f_max, f_ref, IMRPhenomPv2_V, nonGRparams);
+            if (ret == XLAL_FAILURE) XLAL_ERROR(XLAL_EFUNC);
+            break;
+
+        case IMRPhenomPv3:
+            /* Waveform-specific sanity checks */
+            spin1[0]=S1x; spin1[1]=S1y; spin1[2]=S1z;
+            spin2[0]=S2x; spin2[1]=S2y; spin2[2]=S2z;
+            iTmp=i;
+            XLALSimInspiralInitialConditionsPrecessingApproxs(&i,&S1x,&S1y,&S1z,&S2x,&S2y,&S2z,iTmp,spin1[0],spin1[1],spin1[2],spin2[0],spin2[1],spin2[2],m1,m2,f_ref,XLALSimInspiralGetFrameAxis(waveFlags));
+            if( !XLALSimInspiralModesChoiceIsDefault(          /* Default is (2,2) or l=2 modes. */
+                    XLALSimInspiralGetModesChoice(waveFlags) ) )
+                ABORT_NONDEFAULT_MODES_CHOICE(waveFlags);
+            if( !checkTidesZero(lambda1, lambda2) )
+                ABORT_NONZERO_TIDES(waveFlags);
+            LNhatx = sin(i);
+            LNhaty = 0.;
+            LNhatz = cos(i);
+            /* Tranform to model parameters */
+            if(f_ref==0.0)
+                f_ref = f_min; /* Default reference frequency is minimum frequency */
+            XLALSimIMRPhenomPCalculateModelParameters(
+                &chi1_l, &chi2_l, &chip, &thetaJ, &alpha0,
+                m1, m2, f_ref,
+                LNhatx, LNhaty, LNhatz,
+                S1x, S1y, S1z,
+                S2x, S2y, S2z, IMRPhenomPv3_V);
+            /* Call the waveform driver routine */
+            ret = XLALSimIMRPhenomP(hptilde, hctilde,
+              chi1_l, chi2_l, chip, thetaJ,
+              m1, m2, r, alpha0, phiRef, deltaF, f_min, f_max, f_ref, IMRPhenomPv3_V, nonGRparams);
             if (ret == XLAL_FAILURE) XLAL_ERROR(XLAL_EFUNC);
             break;
 
@@ -3999,6 +4031,7 @@ int XLALSimInspiralImplementedFDApproximants(
         case IMRPhenomD:
         case IMRPhenomP:
         case IMRPhenomPv2:
+        case IMRPhenomPv3:
         case EOBNRv2_ROM:
         case EOBNRv2HM_ROM:
         case SEOBNRv1_ROM_EffectiveSpin:
@@ -4398,6 +4431,7 @@ int XLALSimInspiralGetSpinSupportFromApproximant(Approximant approx){
     case SpinTaylorT3:
     case IMRPhenomP:
     case IMRPhenomPv2:
+    case IMRPhenomPv3:
     case SpinTaylorT2Fourier:
     case SpinTaylorT4Fourier:
     case SpinDominatedWf:
@@ -4535,6 +4569,7 @@ int XLALSimInspiralApproximantAcceptTestGRParams(Approximant approx){
     case IMRPhenomD:
     case IMRPhenomP:
     case IMRPhenomPv2:
+    case IMRPhenomPv3:
       testGR_accept=LAL_SIM_INSPIRAL_TESTGR_PARAMS;
       break;
     default:
