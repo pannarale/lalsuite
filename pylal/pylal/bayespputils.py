@@ -110,6 +110,16 @@ def replace_column(table, old, new):
     table.remove_column(old)
     table.add_column(astropy.table.Column(new, name=old), index=index)
 
+def as_array(table):
+    """Workaround for missing astropy.table.Table.as_array method,
+    which was added in Astropy 1.0.
+
+    FIXME: remove this function when LALSuite depends on Astropy >= 1.0."""
+    try:
+        return table.as_array()
+    except:
+        return table._data
+
 #===============================================================================
 # Constants
 #===============================================================================
@@ -1972,7 +1982,7 @@ class Posterior(object):
                 lalsim.SimInspiralInitialConditionsPrecessingApproxs(inj.inclination,
                                                                      inj.spin1x, inj.spin1y, inj.spin1z,
                                                                      inj.spin2x, inj.spin2y, inj.spin2z,
-                                                                     m1*lal.MSUN_SI, m2*lal.MSUN_SI, f_ref, axis)
+                                                                     m1*lal.MSUN_SI, m2*lal.MSUN_SI, f_ref, inj.coa_phase, axis)
 
             a1, theta1, phi1 = cart2sph(s1x, s1y, s1z)
             a2, theta2, phi2 = cart2sph(s2x, s2y, s2z)
@@ -6100,7 +6110,7 @@ class PEOutputParser(object):
             nskip = find_ndownsample(samples, nDownsample)
             samples = samples[::nskip]
 
-        return samples.colnames, samples.as_array().view(float).reshape(-1, len(samples.columns))
+        return samples.colnames, as_array(samples).view(float).reshape(-1, len(samples.columns))
 
     def _hdf5_to_table(self, infile, deltaLogP=None, fixedBurnin=None, nDownsample=None, multiple_chains=False, **kwargs):
         """
@@ -6183,7 +6193,7 @@ class PEOutputParser(object):
     def _hdf5_to_pos(self, infile, **kwargs):
         samples = self._hdf5_to_table(infile, **kwargs)
 
-        return samples.colnames, samples.as_array().view(float).reshape(-1, len(samples.columns))
+        return samples.colnames, as_array(samples).view(float).reshape(-1, len(samples.columns))
 
     def _common_to_pos(self,infile,info=[None,None]):
         """
