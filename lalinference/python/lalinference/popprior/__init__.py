@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import h5py
 from scipy import special
+from scipy.integrate import quad
 from scipy.misc import logsumexp
 import time
 import random
@@ -37,21 +38,24 @@ from glue.text_progress_bar import ProgressBar
 
 def extended_templates(m,N=50):
     # Builds a buffered ConvexHull around the template in order to bound the Voronoi regions
+    print "building buffered ConvexHull..."
     n = np.shape(m)[-1] # number of dimensions in template bank
     hull = ConvexHull(m)
     gauss = np.random.randn(N,n)
     new_points = np.zeros(np.shape(gauss))
     for i in range(N):
-        new_points[i] = (0.5/gauss[i].dot(gauss[i]))*gauss[i]
+        new_points[i] = (0.01/gauss[i].dot(gauss[i]))*gauss[i]
     surr = new_points+m[hull.vertices[0]]
     for j in range(len(hull.vertices)-1):
         surr = np.concatenate((surr,new_points+m[hull.vertices[j+1]])) # array of points centred around each ConvexHull vertex
     hull2 = ConvexHull(surr) # Create a new ConvexHull of this array
+    print "buffered ConvexHull created."
     return surr[hull2.vertices], Voronoi(np.concatenate((surr[hull2.vertices],m))) # return the vertices of the new convex hull, and the Voronoi object of the combined (bank + new convex hull vertices)
 
 def find_voronoi_volumes(m):
     # Find and compute the volume of each Voronoi region in the bounded Voronoi diagram
     boundary, vor = extended_templates(m) # Create the bounded Voronoi diagram
+    print "computing Voronoi volumes..."
     all_v = []
     all_p = []
     all_i = []
@@ -77,17 +81,29 @@ def find_voronoi_volumes(m):
     output.close()
     return output_string
 
-def find_ln_p_j(m, f, popt, hdf5_file):
+def find_ln_p_j(pdfs, lower_limits, upper_limits, norms, hdf5_file):
+    # check if pdfs normalized
+    for i in range(len(pdfs)):
+        assert (abs(1.0-quad(pdfs[i], lower_limits[i], upper_limits[i], args=(1./norms[i],))[0]) < 1e-8), "PDFs must be normalized!"
     # Calculate ln(P_j)
     vol = h5py.File(hdf5_file,'r')
     v, p, i = vol['bank_volumes'].value, vol['bank_templates'].value, vol['bank_indices'].value
     # Calculate probability distributions for the source population
-    p_m1 = f(p[:,0],*popt)/np.trapz(f(p[:,0][np.argsort(p[:,0])],*popt),p[:,0][np.argsort(p[:,0])]) 
-    p_m2 = f(p[:,1],*popt)/np.trapz(f(p[:,1][np.argsort(p[:,1])],*popt),p[:,1][np.argsort(p[:,1])])
-    p_a1 = np.ones(len(i))
-    p_a2 = np.ones(len(i))
-    p_tj = p_m1*p_m2*p_a1*p_a2*np.array(v) # Calculate P_j (unnormalized)
+    #p_m1 = f(p[:,0],*popt)/np.trapz(f(p[:,0][np.argsort(p[:,0])],*popt),p[:,0][np.argsort(p[:,0])]) 
+    #p_m2 = f(p[:,1],*popt)/np.trapz(f(p[:,1][np.argsort(p[:,1])],*popt),p[:,1][np.argsort(p[:,1])])
+    p_m1 = pdfs[0](p[:,0], 1./norms[0])
+    p_m2 = pdfs[1](p[:,1], 1./norms[1])
+    p_chi1 = pdfs[2](p[:,2], 1./norms[2])
+    p_chi2 = pdfs[3](p[:,3], 1./norms[3])
+    p_tj = p_m1 * p_m2 * p_chi1 * p_chi2 * np.array(v) # Calculate P_j (unnormalized)
     return np.log(p_tj)-np.log(sum(p_tj)), p, i, v
+
+def normalize_source_population(pdfs, lower_limits, upper_limits):
+    length = len(pdfs)
+    norms = np.zeros(length)
+    for i in range(length):
+        norms[i] = quad(pdfs[i], lower_limits[i], upper_limits[i], args=(1,))[0]
+    return pdfs, norms
     
 def find_ln_p_j_voronoi(m, f, popt):
     vor = Voronoi(m)
@@ -153,10 +169,13 @@ def ln_p_k(ovrlp, rho, t_k, N=4, acc=0.001):
     return ln_num-ln_den # returns array of values
 
 def ln_p_k_num(tjtk, rho, N, sqrtpiover2 = np.sqrt(np.pi/2.), sqrt2 = np.sqrt(2.)):
-    x = np.array(tjtk*rho)
-    #if rho == 0:
-    #    return np.zeros(len(x))
+    x = tjtk*rho
     halfxsquared = 0.5*x**2.
+    if np.isscalar(x):
+        if x==0:
+            x = np.exp(-200)
+    else:
+        x[x==0] = np.exp(-200) 
     if N == 5:
         return halfxsquared +np.log( sqrtpiover2*(x**4.+6.*x**2.+3)*(special.erf(x/sqrt2))+np.exp(-halfxsquared)*(x**3.+5.*x)) # N = 5
     if N == 4:
@@ -165,7 +184,7 @@ def ln_p_k_num(tjtk, rho, N, sqrtpiover2 = np.sqrt(np.pi/2.), sqrt2 = np.sqrt(2.
         return halfxsquared + np.log( sqrtpiover2*(x**2.+1.)*(1.+special.erf(x/sqrt2))+np.exp(-halfxsquared)*x ) # N = 3
 
 def ln_p_k_den(tjtk, rho, N, acc=0.001):
-    # Finds the denominator part of the probability P(t_k | t_j) for N=4 dimensions (m1, m2, chi_eff, rho)
+    # Finds the denominator part of the probability P(t_k | t_j) for N
     # P(t_k | t_j) is a template for the signal rho*t_j (tjtk is the overlap between t_k and t_j)
     # acc = accuracy we wish to obtain
     # Denominator is the sum of all numerator terms

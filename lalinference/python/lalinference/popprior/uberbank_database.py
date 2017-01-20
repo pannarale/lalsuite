@@ -84,7 +84,7 @@ class Bank(object):
         #start_time0 = time.time()
         for (filename, column), k in itertools.groupby(cursor.execute("SELECT fname.filename, a.column, b.k FROM bank AS a JOIN bank AS b ON (b.filename_id = a.filename_id) JOIN fname ON (fname.filename_id=a.filename_id) WHERE a.k = ? AND a.row IS NULL AND b.row IS NOT NULL ORDER BY fname.filename, b.row;", (template_number,)), lambda (fn, c, k_idx): (fn, c)):
             #start_time = time.time()
-            print >> sys.stderr, filename
+            #print >> sys.stderr, filename
             f = h5py.File(filename, "r")
             overlaps[[x[-1] for x in k]] = f[f.keys()[0]]['overlaps'].value[:,column]
             f.close() # keeps the open file count down
