@@ -30,6 +30,7 @@ from glue.ligolw import utils
 from glue.ligolw import ilwd
 from glue.ligolw.utils import process as ligolw_process
 from lal import REAL8FrequencySeries
+from pycbc.tmpltbank.em_progenitors import min_eta_for_em_bright
 
 from optparse import OptionParser
 
@@ -179,6 +180,11 @@ def parse_command_line():
     parser.add_option("--ns-spin-max", type=float, metavar="SPIN", help="Maximum spin for neutron stars when using --ns-bh-boundary-mass.")
 
     #
+    # additional parameter constraints options
+    #
+    parser.add_option("--constraint-file", help="Path to file with additional constraint on the parameters.  This is an npz file that stores mass2, spin1z, and eta values such that only the parameter space region above this surface is targetted by the bank", metavar="FILE")
+
+    #
     # initial condition options
     #
     parser.add_option("--seed", help="Set the seed for the random number generator used by SBank for waveform parameter (masss, spins, ...) generation.", metavar="INT", default=1729, type="int")
@@ -325,7 +331,7 @@ opts, args = parse_command_line()
 #
 # choose waveform approximant
 #
-tmplt_class = waveforms[opts.approximant]
+tmplt_class= waveforms[opts.approximant]
 
 #
 # choose noise model
@@ -509,6 +515,18 @@ else:
     proposal = proposals[opts.approximant](opts.flow, tmplt_class, bank,
                                            **params)
 
+# Load the file containing the EM brigh/dim boundary in the format
+# NS mass, BH spin, symmetric mass ratio
+if opts.constraint_file:
+    if os.path.isfile(opts.constraint_file):
+        print "Loading the constraints file"
+        constraint_datafile = np.load(opts.constraint_file)
+        mass2_pts = constraint_datafile['mNS_pts']
+        spin1z_pts = constraint_datafile['sBH_pts']
+        eta_min_pts = constraint_datafile['eta_mins']
+    else:
+        sys.exit("Constraints file not found!")
+
 
 # For robust convergence, ensure that an average of kmax/len(ks) of
 # the last len(ks) proposals have been rejected by SBank.
@@ -516,6 +534,9 @@ ks = deque(10*[1], maxlen=10)
 k = 0 # k is nprop per iteration
 nprop = 0  # count total number of proposed templates
 status_format = "\t".join("%s: %s" % name_format for name_format in zip(tmplt_class.param_names, tmplt_class.param_formats))
+
+# Boolean for accepting template proposal: relevant only if constraint_file is provided, otherwise always True
+tmplt_suits_constraint_file = True 
 
 #
 # main working loop
@@ -528,56 +549,73 @@ for tmplt in proposal:
     if not (((k + float(sum(ks)))/len(ks) < opts.convergence_threshold) and \
             (len(tbl) < opts.max_new_templates)):
         break
-
-    # accounting for number of proposals
-    k += 1 # since last acceptance
-    nprop += 1 # total throughout lifetime of process
-
-    #
-    # check if proposal is already covered by existing templates
-    #
-    match, matcher = bank.covers(tmplt, opts.match_min)
-    if match < opts.match_min:
-        bank.insort(tmplt)
-        ks.append(k)
-        if opts.verbose:
-            print "\nbank size: %d\t\tproposed: %d\trejection rate: %.6f / (%.6f)" % (len(bank), nprop, 1 - float(len(ks))/float(sum(ks)), 1 - 1./opts.convergence_threshold )
-            print >>sys.stdout, "accepted:\t\t", tmplt
-            if matcher is not None:
-                print >>sys.stdout, "max match (%.4f):\t" % match, matcher
-        k = 0
-
-        # Add to single inspiral table. Do not store templates that
-        # were in the original bank, only store the additions.
-        if not hasattr(tmplt, 'is_seed_point'):
-            if opts.output_filename.endswith(('.xml', '.xml.gz')):
-                row = tmplt.to_sngl()
-                # Event ids must be unique, or the table isn't valid,
-                # SQL needs this
-                row.event_id = ilwd.ilwdchar('sngl_inspiral:event_id:%d' %
-                                             (len(bank), ))
-                # If we figure out how to use metaio's SnglInspiralTable the
-                # following change then defines the event_id
-                #curr_id = EventIDColumn()
-                #curr_id.id = len(bank)
-                #curr_id.snglInspiralTable = row
-                #row.event_id = curr_id
-                row.ifo = opts.instrument
-                row.process_id = process.process_id
-                tbl.append(row)
-            if opts.output_filename.endswith(('.hdf', '.h5', '.hdf5')):
-                row = tmplt.to_storage_arr()
-                if len(tbl) == 0:
-                    tbl = row
-                else:
-                    tbl = np.append(tbl, row)
-
-        if opts.checkpoint and not len(bank) % opts.checkpoint:
-            checkpoint_save(xmldoc, opts.output_filename, process)
-
-    # clear the proposal template if caching is not enabled
-    if not opts.cache_waveforms:
-        tmplt.clear()
+    # If a file with an additional constraint was provided,
+    # make sure the template is in the required region
+    if opts.constraint_file:
+        # Compute the minimum symmetric mass ratio needed to generate a counterpart
+        min_eta = min_eta_for_em_bright(tmplt.spin1z, tmplt.m2, mass2_pts, spin1z_pts, eta_min_pts)
+        # Compute the symmetric mass ratio of the proposed template
+        eta = tmplt.m1*tmplt.m2/(tmplt.m1+tmplt.m2)**2 
+        # Compare the two quantities above
+        if eta < min_eta:
+            tmplt_suits_constraint_file = False
+            #if opts.verbose:
+            #    print >>sys.stdout, "rejected EM-dim template proposal:\t\t", tmplt.params
+        else:
+            tmplt_suits_constraint_file = True
+            #if opts.verbose:
+            #    print >>sys.stdout, "accepted EM-bright template proposal:\t\t", tmplt.params
+    # Proceed with the standard sbank algorithm
+    if tmplt_suits_constraint_file:
+        # accounting for number of proposals
+        k += 1 # since last acceptance
+        nprop += 1 # total throughout lifetime of process
+    
+        #
+        # check if proposal is already covered by existing templates
+        #
+        match, matcher = bank.covers(tmplt, opts.match_min)
+        if match < opts.match_min:
+            bank.insort(tmplt)
+            ks.append(k)
+            if opts.verbose:
+                print "\nbank size: %d\t\tproposed: %d\trejection rate: %.6f / (%.6f)" % (len(bank), nprop, 1 - float(len(ks))/float(sum(ks)), 1 - 1./opts.convergence_threshold )
+                print >>sys.stdout, "accepted:\t\t", tmplt
+                if matcher is not None:
+                    print >>sys.stdout, "max match (%.4f):\t" % match, matcher
+            k = 0
+    
+            # Add to single inspiral table. Do not store templates that
+            # were in the original bank, only store the additions.
+            if not hasattr(tmplt, 'is_seed_point'):
+                if opts.output_filename.endswith(('.xml', '.xml.gz')):
+                    row = tmplt.to_sngl()
+                    # Event ids must be unique, or the table isn't valid,
+                    # SQL needs this
+                    row.event_id = ilwd.ilwdchar('sngl_inspiral:event_id:%d' %
+                                                 (len(bank), ))
+                    # If we figure out how to use metaio's SnglInspiralTable the
+                    # following change then defines the event_id
+                    #curr_id = EventIDColumn()
+                    #curr_id.id = len(bank)
+                    #curr_id.snglInspiralTable = row
+                    #row.event_id = curr_id
+                    row.ifo = opts.instrument
+                    row.process_id = process.process_id
+                    tbl.append(row)
+                if opts.output_filename.endswith(('.hdf', '.h5', '.hdf5')):
+                    row = tmplt.to_storage_arr()
+                    if len(tbl) == 0:
+                        tbl = row
+                    else:
+                        tbl = np.append(tbl, row)
+    
+            if opts.checkpoint and not len(bank) % opts.checkpoint:
+                checkpoint_save(xmldoc, opts.output_filename, process)
+    
+        # clear the proposal template if caching is not enabled
+        if not opts.cache_waveforms:
+            tmplt.clear()
 
 
 if opts.verbose:
