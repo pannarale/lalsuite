@@ -30,7 +30,8 @@ from glue.ligolw import utils
 from glue.ligolw import ilwd
 from glue.ligolw.utils import process as ligolw_process
 from lal import REAL8FrequencySeries
-from pycbc.tmpltbank.em_progenitors import min_eta_for_em_bright
+try:
+    from pycbc.tmpltbank.em_progenitors import min_eta_for_em_bright
 
 from optparse import OptionParser
 
@@ -182,7 +183,7 @@ def parse_command_line():
     #
     # additional parameter constraints options
     #
-    parser.add_option("--constraint-file", help="Path to file with additional constraint on the parameters.  This is an npz file that stores mass2, spin1z, and eta values such that only the parameter space region above this surface is targetted by the bank", metavar="FILE")
+    parser.add_option("--constraint-file", help="Path to file with additional constraint on the parameters.  This is an npz file that stores mass2, spin1z, and eta values such that only the parameter space region above this surface is targetted by the bank.  This is typically used to build banks for the CBC-GRB search.  PyCBC must be in your Python environment to make full use of this option.", metavar="FILE")
 
     #
     # initial condition options
@@ -519,7 +520,7 @@ else:
 # NS mass, BH spin, symmetric mass ratio
 if opts.constraint_file:
     if os.path.isfile(opts.constraint_file):
-        print "Loading the constraints file"
+        print "Loading the constraints file. This job will fail if PyCBC is not in your environment"
         constraint_datafile = np.load(opts.constraint_file)
         mass2_pts = constraint_datafile['mNS_pts']
         spin1z_pts = constraint_datafile['sBH_pts']
