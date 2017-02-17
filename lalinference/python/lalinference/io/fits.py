@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 #
 # Copyright (C) 2013-2017  Leo Singer
 #
@@ -214,7 +215,31 @@ FITS_META_MAPPING = (
 
 def write_sky_map(filename, m, **kwargs):
     """Write a gravitational-wave sky map to a file, populating the header
-    with optional metadata."""
+    with optional metadata.
+
+    Parameters
+    ----------
+
+    filename: string
+        Path to the optionally gzip-compressed FITS file.
+
+    m : astropy.table.Table or numpy.array
+        If a Numpy record array or astorpy.table.Table instance, and has a
+        column named 'UNIQ', then interpret the input as NUNIQ-style
+        multi-order map [1]_. Otherwise, interpret as a NESTED or RING ordered
+        map.
+
+    **kwargs
+        Additional metadata to add to FITS header. If m is an
+        astropy.table.Table instance, then the header is initialized from both
+        m.meta and **kwargs.
+
+    References
+    ----------
+    .. [1] Górski, K.M., Wandelt, B.D., Hivon, E., Hansen, F.K., & Banday, A.J.
+        2017. The HEALPix Primer. The Unique Identifier scheme.
+        http://healpix.sourceforge.net/html/intronode4.htm#SECTION00042000000000000000
+    """
 
     if isinstance(m, Table) or (isinstance(m, np.ndarray) and m.dtype.names):
         m = Table(m)
@@ -308,6 +333,21 @@ def read_sky_map(filename, nest=False, distances=False, moc=False):
 
     moc: bool, optional
         If true, then preserve multi-order structure if present.
+
+    Example
+    -------
+
+    Test that we can read a legacy IDL-compatible file
+    (https://bugs.ligo.org/redmine/issues/5168):
+
+    >>> import tempfile
+    >>> with tempfile.NamedTemporaryFile(suffix='.fits') as f:
+    ...     nside = 512
+    ...     npix = hp.nside2npix(nside)
+    ...     ipix_nest = np.arange(npix)
+    ...     hp.write_map(f.name, ipix_nest, nest=True, column_names=['PROB'])
+    ...     m, meta = read_sky_map(f.name)
+    ...     np.testing.assert_array_equal(m, hp.ring2nest(nside, ipix_nest))
     """
     m = Table.read(filename, format='fits')
 
@@ -348,6 +388,7 @@ def read_sky_map(filename, nest=False, distances=False, moc=False):
         m.meta['nest'] = True
 
     if 'UNIQ' not in m.colnames:
+        m = Table([col.ravel() for col in m.columns.values()], meta=m.meta)
         npix = len(m)
         nside = hp.npix2nside(npix)
 
@@ -358,13 +399,12 @@ def read_sky_map(filename, nest=False, distances=False, moc=False):
         elif not m.meta['nest'] and nest:
             m = m[hp.nest2ring(nside, np.arange(npix))]
 
-    if not moc:
-        if distances:
-            return tuple(np.asarray(m[name]).ravel() for name in DEFAULT_NESTED_NAMES), m.meta
-        else:
-            return np.asarray(m[DEFAULT_NESTED_NAMES[0]]).ravel(), m.meta
-
-    return m
+    if moc:
+        return m
+    elif distances:
+        return tuple(np.asarray(m[name]) for name in DEFAULT_NESTED_NAMES), m.meta
+    else:
+        return np.asarray(m[DEFAULT_NESTED_NAMES[0]]), m.meta
 
 
 if __name__ == '__main__':
