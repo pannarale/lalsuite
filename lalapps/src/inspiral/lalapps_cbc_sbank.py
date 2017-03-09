@@ -32,6 +32,8 @@ from glue.ligolw.utils import process as ligolw_process
 from lal import REAL8FrequencySeries
 try:
     from pycbc.tmpltbank.em_progenitors import min_eta_for_em_bright
+except:
+    pass
 
 from optparse import OptionParser
 
