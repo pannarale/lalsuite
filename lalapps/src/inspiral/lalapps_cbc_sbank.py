@@ -335,7 +335,7 @@ opts, args = parse_command_line()
 #
 # choose waveform approximant
 #
-tmplt_class= waveforms[opts.approximant]
+tmplt_class = waveforms[opts.approximant]
 
 #
 # choose noise model
